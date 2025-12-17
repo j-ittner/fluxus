@@ -1,37 +1,162 @@
-# DSL for Asynchronous Flow Composition in Python
+termmd. # DSL for Asynchronous Flow Composition in Python
 
-This is the new design for fluxus 2.0.
+This is the new design for **fluxus 2.0** with **full backwards compatibility** with fluxus 1.0.
 
 ## 1. Purpose and Scope
 
-- Provide a small, composable DSL in Python for building **asynchronous, lazily evaluated dataflow pipelines**.
-- Pipelines are constructed from **steps** that:
-  - Consume and produce dictionaries
-  - Are executed concurrently over collections of such dictionaries
-- Design principles (inspired by Haskell):
-  - **Compositionality**: flows can be composed from smaller flows using a small set of combinators.
-  - **Referential transparency**: flow definitions are pure descriptions; `run` executes them.
-  - **Lazy evaluation**: merged results and intermediate keys are computed on demand.
-  - **Predictable behaviour** via type hints and clear runtime semantics.
+### 1.1 What is Fluxus?
 
-Non-goals (for initial version):
+Fluxus is a small, composable DSL in Python for building **asynchronous, lazily evaluated dataflow pipelines**. Think of it as a way to chain together data processing steps where:
+- Each step receives a dictionary and produces a dictionary
+- Steps run concurrently when possible
+- The framework tracks complete lineage of data through the pipeline
 
-- Full streaming transport (backpressure, networked streams, etc.).
-- Arbitrary cyclic graphs (focus on DAG-like or well-structured branching/merging semantics; an explicit `loop` combinator provides controlled cycles).
-- Sophisticated scheduling or cluster execution.
+### 1.2 Core Building Blocks (in order of complexity)
+
+#### Records
+A **record** is simply a dictionary representing data at a point in your pipeline:
+```python
+record = {"name": "Alice", "age": 30}
+```
+
+#### Steps
+A **step** is a single processing unit—a Python function wrapped to work in the pipeline:
+```python
+from fluxus.functional import step
+
+# Define a step: takes a record, returns a record
+def add_greeting(name: str) -> dict[str, object]:
+    return {"greeting": f"Hello, {name}!"}
+
+greet_step = step("greet", add_greeting)
+```
+
+#### Conduits
+A **conduit** is anything that can process records—individual steps or compositions of steps. Steps are conduits, and when you combine steps using operators, you create new conduits.
+
+### 1.3 Building Pipelines: Two Equivalent Styles
+
+Fluxus supports two styles for building pipelines that are completely interchangeable:
+
+#### Style 1: Operator-Based (Concise)
+Use `>>` for sequence, `&` for parallel, `~` for merge:
+
+```python
+from fluxus.functional import step, passthrough
+
+# Define steps
+load = step("load", lambda: {"data": [1, 2, 3]})
+double = step("double", lambda data: {"doubled": [x * 2 for x in data]})
+triple = step("triple", lambda data: {"tripled": [x * 3 for x in data]})
+summarize = step("summarize", lambda doubled, tripled: {
+    "summary": f"Doubled: {doubled}, Tripled: {tripled}"
+})
+
+# Sequential: load, then double
+pipeline1 = load >> double
+
+# Parallel: double and triple in parallel, then summarize both results
+pipeline2 = load >> ~(double & triple) >> summarize
+
+# Parallel with passthrough: process in parallel, keep original data
+pipeline3 = load >> (double & passthrough()) >> summarize
+```
+
+#### Style 2: Functional API (Explicit)
+Use `chain()`, `parallel()`, `merge()` for the same logic:
+
+```python
+from fluxus.functional import step, chain, parallel, merge, passthrough
+
+# Same steps as above
+load = step("load", lambda: {"data": [1, 2, 3]})
+double = step("double", lambda data: {"doubled": [x * 2 for x in data]})
+triple = step("triple", lambda data: {"tripled": [x * 3 for x in data]})
+summarize = step("summarize", lambda doubled, tripled: {
+    "summary": f"Doubled: {doubled}, Tripled: {tripled}"
+})
+
+# Sequential: load, then double
+pipeline1 = chain(load, double)
+
+# Parallel: double and triple in parallel, then summarize both results
+pipeline2 = chain(
+    load,
+    merge(parallel(double, triple)),
+    summarize
+)
+
+# Parallel with passthrough: process in parallel, keep original data
+pipeline3 = chain(
+    load,
+    parallel(double, passthrough()),
+    summarize
+)
+```
+
+Both styles are **exactly equivalent**—use whichever feels more natural for your use case.
+
+### 1.4 Executing Pipelines
+
+Once you've built a conduit, execute it:
+
+```python
+from fluxus.functional import run
+
+# Synchronous execution (1.0 compatibility)
+result = run(pipeline2)
+
+# Or asynchronous execution
+result = await pipeline2.arun()
+
+# Access outputs
+for output in result.get_outputs():
+    print(output["summary"])
+
+# Or as DataFrame
+df = result.to_frame()
+```
+
+### 1.5 Design Principles (inspired by Haskell)
+
+- **Compositionality**: Conduits compose from smaller conduits using a small set of combinators (`>>`, `&`, `~` or their functional equivalents)
+- **Referential transparency**: Conduit definitions are pure descriptions; execution happens only when you call `run()` or `arun()`
+- **Lazy evaluation**: Merged results and intermediate keys are computed on demand
+- **Predictable behaviour**: Type hints and clear runtime semantics make behavior obvious
+- **Backwards compatibility**: Full compatibility with fluxus 1.0 API and naming—existing code continues to work
+
+### 1.6 What Fluxus 2.0 Adds
+
+New features in 2.0 (all backwards-compatible):
+- **Merge operator** (`~` / `merge()`): Combine parallel branches into a single record
+- **Loop combinator** (`loop()`): Controlled iteration until a condition is met
+- **Enhanced lineage**: Track complete data provenance through complex pipelines
+- **Simplified type system**: All records are dictionaries (no more generic types)
+
+### 1.7 Non-Goals (for initial version)
+
+- Full streaming transport (backpressure, networked streams, etc.)
+- Arbitrary cyclic graphs (focus on DAG-like structures; `loop` combinator provides controlled cycles)
+- Sophisticated scheduling or cluster execution
+- Breaking changes from fluxus 1.0 (all existing code must continue to work)
 
 ---
 
 ## 2. Core Concepts and Terminology
 
 - **Record**: a `dict[str, object]` representing the state at a given point in the pipeline.
-- **Flow**:
-  - A compositional description of how steps and subflows are combined.
-  - Can be constructed via operators (`>>`, `&`, `~`) or functional combinators (`chain`, `branch`, `merge`, `loop`).
+- **Conduit**:
+  - A compositional description of how steps and subconduits are combined.
+  - Can be constructed via operators (`>>`, `&`, `~`) or functional combinators (`chain`, `parallel`, `merge`, `loop`).
+  - Maintains backwards compatibility with fluxus 1.0 naming.
 - **Step**:
-  - An atomic `Flow` wrapping a Python callable.
+  - An atomic `Conduit` wrapping a Python callable.
   - Callable signature is inspected to resolve inputs from the record.
   - Callable must return a `dict[str, object]`.
+- **Producer/Transformer/Consumer**:
+  - Facade classes for backwards compatibility with fluxus 1.0.
+  - Advanced users can subclass these for custom conduits.
+  - Most users interact via the functional API (`step()`, `chain()`, `parallel()`).
 - **RunResult**:
   - Encapsulates all outputs and complete lineage for each parallel result.
   - Provides introspection APIs.
@@ -57,46 +182,66 @@ class StepFn(Protocol):
     def __call__(self, *args, **kwargs) -> Record | Awaitable[Record]: ...
 ```
 
-### 3.2 Flow and Step base classes
+### 3.2 Conduit and Step base classes
 
 ```python
 from abc import ABC, abstractmethod
+import asyncio
 
 
-class Flow(ABC):
-    """Abstract base for all flow nodes (steps and composites)."""
+class Conduit(ABC):
+    """Abstract base for all conduits (steps and composites).
+
+    Maintains backwards compatibility with fluxus 1.0 naming and API.
+    """
 
     name: str
 
+    def run(self) -> "RunResult":
+        """Execute this conduit synchronously (fluxus 1.0 compatibility).
+
+        Wraps arun() for backwards compatibility with existing sync code.
+        """
+        return asyncio.run(self.arun())
+
     @abstractmethod
-    async def run(
+    async def arun(
         self,
-        inputs: Records,
+        inputs: list[Record] | None = None,
         *,
         concurrency: int | None = None,
-    ) -> "RunResult | AsyncIterator[RunResult]":
-        """Execute this flow over a list of input records.
+    ) -> "RunResult":
+        """Execute this conduit asynchronously over a list of input records.
 
-        Implementations may either:
-        - collect all outputs and return a single `RunResult`, or
-        - return an `AsyncIterator[RunResult]` that streams results as they
-          become available (e.g. when steps spawn multiple concurrent
-          executions downstream).
+        Parameters:
+            inputs: Optional list of input records. If None, the conduit
+                    generates its own inputs (pull model for Producer facades).
+                    If provided, inputs are pushed to the conduit.
+            concurrency: Maximum concurrent step invocations, or None for default.
+
+        Returns:
+            RunResult with all outputs and lineage.
         """
         ...
 
     # Operator DSL
-    def __rshift__(self, other: "Flow") -> "Flow": ...  # sequence
-    def __and__(self, other: "Flow") -> "Flow": ...     # parallel branch
-    def __invert__(self) -> "Flow": ...                  # merge scope
+    def __rshift__(self, other: "Conduit") -> "Conduit": ...  # sequence
+    def __and__(self, other: "Conduit") -> "Conduit": ...     # parallel branch
+    def __invert__(self) -> "Conduit": ...                     # merge scope
 
+    def draw(self, style: str = "graph") -> Any:
+        """Visualize the conduit composition graph.
+
+        Backwards compatibility with fluxus 1.0 visualization.
+        """
+        ...
 
 
 @dataclass(slots=True)
-class Step(Flow):
-    """Atomic flow node wrapping a Python callable.
+class Step(Conduit):
+    """Atomic conduit wrapping a Python callable.
 
-    A Step *is a* Flow and participates in all Flow compositions.
+    A Step *is a* Conduit and participates in all Conduit compositions.
     """
 
     fn: StepFn
@@ -106,40 +251,108 @@ class Step(Flow):
         if self.name is None:
             self.name = getattr(self.fn, "__name__", f"step_{id(self):x}")
 
-    async def run(
+    async def arun(
         self,
-        inputs: Records,
+        inputs: list[Record] | None = None,
         *,
         concurrency: int | None = None,
-    ) -> "RunResult | AsyncIterator[RunResult]":
+    ) -> "RunResult":
         ...
 ```
 
 ### 3.3 Step construction helper
 
 ```python
-def step(fn: StepFn, name: str | None = None) -> Step:
+def step(name: str | None, fn: Callable, **kwargs) -> Conduit:
     """Construct a Step from a callable.
 
-    - If `name` is not provided, the step name defaults to `fn.__name__` if present,
-      otherwise a generated identifier.
-    - `fn` may be synchronous (returns `Record`) or asynchronous
-      (returns `Awaitable[Record]`).
-    - The return value must be a `dict[str, object]`; otherwise a `TypeError` is raised.
+    Maintains fluxus 1.0 signature: step(name, fn, **kwargs)
+
+    Parameters:
+        name: Optional step name. If not provided, defaults to fn.__name__
+              or a generated identifier.
+        fn: The callable to wrap. May be synchronous (returns Record) or
+            asynchronous (returns Awaitable[Record]).
+        **kwargs: Additional arguments for backwards compatibility.
+
+    Returns:
+        A Conduit (Step) wrapping the callable.
+
+    Notes:
+        - The return value of fn must be a dict[str, object]; otherwise TypeError is raised.
+        - Supports both sync and async callables.
     """
     return Step(fn=fn, name=name)
 ```
 
+### 3.4 Producer/Transformer/Consumer Facade Classes (Backwards Compatibility)
+
+For backwards compatibility with fluxus 1.0, the framework provides facade classes that advanced users can subclass:
+
+```python
+class Producer(Conduit):
+    """Facade for conduits that generate data (entry points).
+
+    Backwards compatibility with fluxus 1.0 Producer API.
+    """
+
+    def produce(self) -> Iterator[Record]:
+        """Generate records synchronously."""
+        ...
+
+    async def aproduce(self) -> AsyncIterator[Record]:
+        """Generate records asynchronously."""
+        ...
+
+    # Delegates to internal Conduit.arun() implementation
+
+
+class Transformer(Conduit):
+    """Facade for conduits that process data.
+
+    Backwards compatibility with fluxus 1.0 Transformer API.
+    """
+
+    def transform(self, input: Record) -> Iterator[Record]:
+        """Transform a record synchronously."""
+        ...
+
+    async def atransform(self, input: Record) -> AsyncIterator[Record]:
+        """Transform a record asynchronously."""
+        ...
+
+    # Delegates to internal Conduit.arun() implementation
+
+
+class Consumer(Conduit):
+    """Facade for terminal conduits.
+
+    Backwards compatibility with fluxus 1.0 Consumer API.
+    """
+
+    def consume(self, products: Iterable[tuple[int, Record]]) -> Any:
+        """Consume final products synchronously."""
+        ...
+
+    async def aconsume(self, products: AsyncIterable[tuple[int, Record]]) -> Any:
+        """Consume final products asynchronously."""
+        ...
+
+    # Delegates to internal Conduit.arun() implementation
+```
+
+**Note:** Most users interact via the functional API (`step()`, `chain()`, `parallel()`) and never need to use these classes directly. These facades exist for advanced users who need custom conduit implementations.
+
 ---
 
-## 4. Flow Construction – Operator DSL
+## 4. Conduit Construction – Operator DSL
 
-Flows are built from `Flow` (including `Step`) objects using operators.
+Conduits are built from `Conduit` (including `Step`) objects using operators.
 
 ### 4.1 Sequence: `>>`
 
 ```python
-Flow.__rshift__(self, other: Flow) -> Flow
+Conduit.__rshift__(self, other: Conduit) -> Conduit
 ```
 
 - `a >> b` means: run `a` first, then use its outputs as inputs to `b`.
@@ -148,11 +361,12 @@ Flow.__rshift__(self, other: Flow) -> Flow
     - Apply `a` (may produce `0..n` records).
     - For each resulting record, apply `b`.
 - This defines sequential composition.
+- **Backwards compatible**: Same semantics as fluxus 1.0 `>>` operator.
 
 ### 4.2 Parallel Branching: `&`
 
 ```python
-Flow.__and__(self, other: Flow) -> Flow
+Conduit.__and__(self, other: Conduit) -> Conduit
 ```
 
 - `a & b` means: run `a` and `b` in parallel for each incoming record.
@@ -160,26 +374,29 @@ Flow.__and__(self, other: Flow) -> Flow
   - For each incoming record `r`:
     - Feed `r` into `a` and `b`, each in their own branch.
     - Each branch produces `0..n` records independently.
-  - The flow now represents multiple concurrent branches per original record.
+  - The conduit now represents multiple concurrent branches per original record.
+- **Backwards compatible**: Same semantics as fluxus 1.0 `&` operator.
 
 ### 4.3 Merge / Join Scope: unary `~`
 
 ```python
-Flow.__invert__(self) -> Flow
+Conduit.__invert__(self) -> Conduit
 ```
 
-- `~f` means: merge all concurrent results created within `f`’s branching structure into a single record per original input.
+- `~f` means: merge all concurrent results created within `f`'s branching structure into a single record per original input.
+- **New feature in 2.0**: Not present in fluxus 1.0.
 
 Example:
 
 ```python
-s1 = step(fn=lambda x, y=2: {"y": x + y})
-s2 = step(name="times", fn=lambda x: {"y": x * 5})
+s1 = step("add", lambda x, y=2: {"y": x + y})
+s2 = step("times", lambda x: {"y": x * 5})
 
-flow = s1 & ~((s1 & s2) >> s1)
+conduit = s1 & ~((s1 & s2) >> s1)
 
 inputs = [{"x": 1}, {"x": 2}, {"x": 3}]
-result = await flow.run(inputs)
+result = await conduit.arun(inputs)
+# Or synchronously: result = conduit.run()
 ```
 
 Interpretation:
@@ -191,55 +408,78 @@ Interpretation:
 
 ---
 
-## 5. Flow Construction – Functional DSL
+## 5. Conduit Construction – Functional DSL
 
 To provide a clear, functional alternative for any operator expression, the DSL exposes explicit combinators.
+
+**Backwards compatibility**: Maintains fluxus 1.0 functional API naming.
 
 ### 5.1 `chain(...)`
 
 ```python
-def chain(*flows: Flow) -> Flow:
+def chain(*conduits: Conduit) -> Conduit:
     """Sequentially compose all arguments.
 
     chain(a, b, c) is equivalent to ((a >> b) >> c).
+
+    Backwards compatible with fluxus 1.0.
     """
 ```
 
-### 5.2 `branch(...)`
+### 5.2 `parallel(...)`
 
 ```python
-def branch(*flows: Flow) -> Flow:
+def parallel(*conduits: Conduit) -> Conduit:
     """Parallel branch composition.
 
-    branch(a, b, c) is equivalent to (a & b & c).
+    parallel(a, b, c) is equivalent to (a & b & c).
+
+    Backwards compatible with fluxus 1.0 (was called 'parallel' in 1.0, not 'branch').
     """
 ```
 
-### 5.3 `merge(...)`
+### 5.3 `passthrough()`
 
 ```python
-def merge(flow: Flow) -> Flow:
-    """Merge all concurrent results created inside `flow`'s scope.
+def passthrough() -> Conduit:
+    """Return a transparent conduit that passes input unchanged.
 
-    Equivalent to `~flow`.
+    Backwards compatibility with fluxus 1.0.
+
+    Useful in parallel compositions where one branch should pass through:
+        parallel(transform1, transform2, passthrough())
     """
 ```
 
-### 5.4 `loop(...)`
+### 5.4 `merge(...)`
+
+```python
+def merge(conduit: Conduit) -> Conduit:
+    """Merge all concurrent results created inside `conduit`'s scope.
+
+    Equivalent to `~conduit`.
+
+    New feature in 2.0.
+    """
+```
+
+### 5.5 `loop(...)`
 
 ```python
 ConditionFn = Callable[[Record], bool]
 
 
-def loop(*, until: ConditionFn, flow: Flow) -> Flow:
-    """Repeatedly apply `flow` to each record until `until(record)` is true.
+def loop(*, until: ConditionFn, conduit: Conduit) -> Conduit:
+    """Repeatedly apply `conduit` to each record until `until(record)` is true.
+
+    New feature in 2.0.
 
     Semantics (per record):
     - Start from the incoming record.
     - While `not until(current_record)`:
-        - Apply `flow` to `[current_record]`.
-        - If `flow` yields no records, terminate the loop for this record.
-        - If `flow` yields `>1` records, this creates branches *within the loop*.
+        - Apply `conduit` to `[current_record]`.
+        - If `conduit` yields no records, terminate the loop for this record.
+        - If `conduit` yields `>1` records, this creates branches *within the loop*.
           All branches continue looping independently until `until` holds
           for their current record.
     - Records for which `until` eventually returns `True` are emitted.
@@ -251,22 +491,40 @@ def loop(*, until: ConditionFn, flow: Flow) -> Flow:
     """
 ```
 
-### 5.5 Example mapping between styles
+### 5.6 `run(...)` - Standalone Execution Function
+
+```python
+def run(conduit: Conduit, input: Any = None, timestamps: bool = False) -> RunResult:
+    """Execute a conduit and return results.
+
+    Backwards compatibility with fluxus 1.0 functional API.
+
+    Parameters:
+        conduit: The conduit to execute
+        input: Optional input data (for push model). If None, conduit generates its own inputs.
+        timestamps: Whether to track execution timestamps
+
+    Returns:
+        RunResult with outputs and lineage
+    """
+```
+
+### 5.7 Example mapping between styles
 
 Given the operator-style example:
 
 ```python
-flow = s1 & ~((s1 & s2) >> s1)
+conduit = s1 & ~((s1 & s2) >> s1)
 ```
 
 A functional equivalent is:
 
 ```python
-flow = branch(
+conduit = parallel(
     s1,
     merge(
         chain(
-            branch(s1, s2),
+            parallel(s1, s2),
             s1,
         ),
     ),
@@ -275,38 +533,50 @@ flow = branch(
 
 Requirements:
 
-- Every operator-based flow must have a functional equivalent via `branch`, `chain`, `merge`, and optionally `loop`.
+- Every operator-based conduit must have a functional equivalent via `parallel`, `chain`, `merge`, and optionally `loop`.
 - The library should document that equivalence and keep the semantics aligned.
 
 ---
 
 ## 6. Execution API and RunResult
 
-### 6.1 Execution API on Flow
+### 6.1 Execution API on Conduit
 
 ```python
-class Flow:
+class Conduit:
     name: str
 
-    async def run(
+    def run(self) -> "RunResult":
+        """Synchronous execution (fluxus 1.0 compatibility).
+
+        Wraps arun() for backwards compatibility.
+        """
+        return asyncio.run(self.arun())
+
+    async def arun(
         self,
-        inputs: Records,
+        inputs: list[Record] | None = None,
         *,
         concurrency: int | None = None,
-    ) -> "RunResult | AsyncIterator[RunResult]":
+    ) -> "RunResult":
         ...
 ```
 
-- `inputs` is a list of initial records.
+- `inputs` is an optional list of initial records:
+  - If `None`, the conduit generates its own inputs (pull model, for Producer facades)
+  - If provided, inputs are pushed to the conduit (push model, for Step-based flows)
 - `concurrency` controls the maximum number of concurrent step invocations (or `None` for default behaviour).
-- The return value of `run` may be either:
-  - a single `RunResult` (fully materialised outputs), or
-  - an `AsyncIterator[RunResult]` that streams results as they become available when steps spawn multiple concurrent executions downstream.
+- The return value is a single `RunResult` (fully materialised outputs).
+
+**Backwards compatibility notes:**
+- Both `run()` (sync) and `arun()` (async) are provided
+- `inputs` parameter is optional to support both pull and push models
 
 ### 6.2 RunResult and Lineage
 
 ```python
-from typing import NamedTuple
+from typing import NamedTuple, Iterator
+import pandas as pd
 
 
 class StepOutput(NamedTuple):
@@ -327,19 +597,75 @@ class Lineage:
 
 
 class RunResult:
-    """Execution result for a flow.
+    """Execution result for a conduit.
 
-    - Contains final outputs and full lineage for each final record.
+    Contains final outputs and full lineage for each final record.
+
+    Provides both fluxus 2.0 API (lineage_for, all_lineages) and
+    fluxus 1.0 backwards compatible API (get_outputs, to_frame, draw_timeline).
     """
 
     final: list[Record]
 
+    # === New 2.0 API ===
+
     def lineage_for(self, index: int) -> Lineage:
-        """Return lineage for `final[index]`."""
+        """Return lineage for `final[index]`.
+
+        New in fluxus 2.0.
+        """
         ...
 
     def all_lineages(self) -> list[Lineage]:
-        """Return lineages for all final records."""
+        """Return lineages for all final records.
+
+        New in fluxus 2.0.
+        """
+        ...
+
+    # === Backwards Compatible 1.0 API ===
+
+    def get_outputs(self) -> Iterator[Record]:
+        """Iterate over all final outputs.
+
+        Backwards compatible with fluxus 1.0.
+
+        Equivalent to: iter(self.final)
+        """
+        return iter(self.final)
+
+    def get_outputs_per_path(self) -> list[Iterator[Record]]:
+        """Get outputs grouped by parallel path.
+
+        Backwards compatible with fluxus 1.0.
+
+        Returns a list of iterators, one per parallel branch in the conduit.
+        """
+        ...
+
+    def to_frame(self, path: int | None = None, simplify: bool = False) -> pd.DataFrame:
+        """Convert results to pandas DataFrame.
+
+        Backwards compatible with fluxus 1.0.
+
+        Parameters:
+            path: Optional path index to convert. If None, converts all paths.
+            simplify: Whether to simplify the DataFrame structure.
+
+        Returns:
+            pandas DataFrame with results and lineage.
+        """
+        ...
+
+    def draw_timeline(self, style: str = "matplot", out: Any = None):
+        """Visualize execution timeline.
+
+        Backwards compatible with fluxus 1.0.
+
+        Parameters:
+            style: Visualization style ("matplot" for matplotlib output)
+            out: Optional output target (file path or stream)
+        """
         ...
 ```
 
@@ -348,6 +674,7 @@ Requirements:
 - `RunResult.final` is a list of final output records after all merges and loops.
 - `lineage_for(i)` returns a `Lineage` object that can reconstruct the ordered sequence of `(step, output)` that contributed to `final[i]`.
 - Lineage includes branch and loop iterations as separate entries.
+- All fluxus 1.0 methods are preserved for backwards compatibility.
 
 ---
 
@@ -395,28 +722,29 @@ Initial behaviour:
 
 ## 8. Execution Semantics and Concurrency
 
-- Each `Flow` operates over a multiset of records.
+- Each `Conduit` operates over a multiset of records.
+- **Note**: All products must be `dict[str, object]` in fluxus 2.0 (simplified from 1.0's generic types).
 
 ### 8.1 Granularity
 
-- **Step application / sequence (**``**)**:
+- **Step application / sequence (**`>>`**)**:
 
   - Input: list of records.
   - Output: list of records from the next step.
 
-- **Branch (**``**)**:
+- **Parallel Branch (**`&`**)**:
 
   - Input: list of records.
   - Output: concatenation of results from each branch, with branch identity tracked in lineage for later merging.
 
-- **Merge (**``** / **``**)**:
+- **Merge (**`~`** / **`merge()`**)**:
 
   - Input: list of records with branch identifiers.
   - For each original input record, gather all branch results in that merge scope and build a single merged record where each key maps to a list of values, one per branch, with missing values represented as `None`.
 
-- **Loop (**``**)**:
+- **Loop (**`loop()`**)**:
 
-  - Applied per record as described above; may generate multiple records if the inner `flow` branches.
+  - Applied per record as described above; may generate multiple records if the inner `conduit` branches.
   - Each loop iteration is part of the lineage and can be distinguished via metadata (e.g. iteration counter) in the implementation.
 
 ### 8.2 Concurrency
@@ -533,5 +861,31 @@ Potential extensions (not required for the initial version):
 - Loop safeguards:
   - Optional `max_iterations` in `loop` to prevent unbounded cycles.
 
-```}
-```
+---
+
+## 14. Backwards Compatibility Summary
+
+This design maintains full backwards compatibility with fluxus 1.0:
+
+### Preserved from 1.0:
+- ✅ `Conduit` class name (not `Flow`)
+- ✅ `Producer`, `Transformer`, `Consumer` facade classes for advanced users
+- ✅ Both `run()` (sync) and `arun()` (async) execution methods
+- ✅ Operators: `>>` (sequence) and `&` (parallel) with same semantics
+- ✅ Functional API: `step()`, `chain()`, `parallel()`, `passthrough()`, `run()`
+- ✅ `step()` signature: `step(name, fn, **kwargs)` (not `step(fn, name)`)
+- ✅ RunResult methods: `get_outputs()`, `get_outputs_per_path()`, `to_frame()`, `draw_timeline()`
+- ✅ Visualization: `conduit.draw(style="graph")`
+- ✅ Pull model: Producers can generate their own inputs
+
+### New in 2.0:
+- ✨ `~` operator and `merge()` for merging parallel branches
+- ✨ `loop()` combinator for controlled iteration
+- ✨ Enhanced lineage: `lineage_for()`, `all_lineages()`
+- ✨ Simplified type system: dict-only products (no generic types)
+- ✨ Optional push model: `arun(inputs=[...])`
+
+### Migration Path:
+- **Existing 1.0 code works unchanged**: All functional API and OOP API code continues to work
+- **New 2.0 features available alongside**: Users can adopt merge/loop incrementally
+- **No breaking changes**: Deprecated patterns can be supported for several major versions
