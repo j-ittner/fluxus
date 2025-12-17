@@ -4,7 +4,6 @@ build
 env/
 .venv/
 venv/
-/fluxus
 
 # environment variables
 .env
@@ -16,9 +15,6 @@ coverage.xml
 
 # notebooks
 .ipynb_checkpoints/
-
-# IntelliJ project
-/.idea
 
 # macos
 .DS_Store
