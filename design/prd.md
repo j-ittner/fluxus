@@ -19,6 +19,25 @@ A **record** is simply a dictionary representing data at a point in your pipelin
 record = {"name": "Alice", "age": 30}
 ```
 
+**Type Safety and Validation (Recommended):**
+For simplicity, fluxus does not bake type validation into the engine—records are just `dict[str, object]`. However, **we recommend using Pydantic at runtime** to validate record schemas:
+
+```python
+from pydantic import BaseModel, ValidationError
+
+class UserRecord(BaseModel):
+    name: str
+    age: int
+
+def validate_user(name: str, age: int) -> dict[str, UserRecord]:
+    # Pydantic validates at runtime
+    return UserRecord(name=name, age=age)
+
+validated_step = step("validate", validate_user)
+```
+
+This keeps the fluxus core lightweight while giving you production-grade validation where you need it.
+
 #### Steps
 A **step** is a single processing unit—a Python function wrapped to work in the pipeline:
 ```python
